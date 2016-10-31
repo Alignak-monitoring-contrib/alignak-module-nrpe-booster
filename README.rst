@@ -20,9 +20,11 @@ Build status (development release)
 Short description
 -----------------
 
-This module allows Alignak Pollers to bypass the launch of the check_nrpe process.
-It reads the check command and opens the connection by itself.
-It scales the use of NRPE for active supervision of servers hosting NRPE agents.
+This module allows Alignak Pollers to bypass the launch of the check_nrpe process. This allow
+to use NRPE checks without the need to install the Nagios NRPE plugin.
+
+This module reads the check command and opens the connection by itself. It scales the use of NRPE
+for active monitoringof servers hosting NRPE agents.
 
 
 Installation

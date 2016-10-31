@@ -143,6 +143,8 @@ class NRPE(object):
         self.host = host
         self.port = port
         self.use_sll = use_ssl
+        self.rc = 3
+        self.message = ''
         crc = 0
 
         # We pack it, then we compute CRC32 of this first query
