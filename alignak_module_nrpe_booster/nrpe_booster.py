@@ -95,14 +95,13 @@ logger = logging.getLogger('alignak.module')  # pylint: disable=C0103
 # pylint: disable=C0103
 properties = {
     'daemons': ['poller'],
-    'type': 'checks',
+    'type': 'nrpe_poller',
     'phases': ['running'],
 
     'external': False,
 
     # To be a real worker module, we must set this
-    'worker_capable': True,
-    'type': 'nrpe-poller'
+    'worker_capable': True
 }
 
 
