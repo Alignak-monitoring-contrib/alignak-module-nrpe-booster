@@ -67,7 +67,7 @@ class NrpePollerTestMixin(object):
         return my_module
 
 
-@unittest.skipIf(os.name == 'nt', "nrpe poller don't work here")
+@unittest.skipIf(os.name == 'nt', "NRPE poller do not run with Windows")
 class TestNrpePoller(NrpePollerTestMixin, AlignakTest):
     def test_nrpe_poller(self):
         """

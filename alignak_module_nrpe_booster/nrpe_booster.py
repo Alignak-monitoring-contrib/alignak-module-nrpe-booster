@@ -145,12 +145,6 @@ class NRPE(object):
         self.use_sll = use_ssl
         crc = 0
 
-        if not command:
-            self.rc = 3
-            self.message = "Error : no command asked from nrpe query"
-            self.state = 'received'
-            return
-
         # We pack it, then we compute CRC32 of this first query
         query = struct.pack(">2hih1024scc", 02, 01, crc, 0, command, 'N', 'D')
         crc = binascii.crc32(query)
@@ -245,7 +239,7 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
             self.set_exit(2, "Cannot connect to %s: %s" % (addr, err))
         else:
             self.rc = 3
-            self.message = 'Sending request and waiting response..'
+            self.message = 'Sending request and waiting response...'
 
     def wrap_ssl(self):
         """
@@ -439,9 +433,9 @@ def parse_args(cmd_args):
     try:
         opts, args = getopt.getopt(cmd_args, "H::p::nut::c::a::", [])
     except getopt.GetoptError as err:
-        # If we got problem, bail out
+        # If we got problem, bail out - say host is None
         logger.exception("Could not parse a command: %s", err)
-        return host, port, unknown_on_timeout, command, timeout, use_ssl, add_args
+        return None, port, unknown_on_timeout, command, timeout, use_ssl, add_args
 
     for o, a in opts:
         if o == "-H":
@@ -542,12 +536,14 @@ class NrpePoller(BaseModule):
 
     def launch_new_checks(self):
         """
-
+        Launch the new received checks
         :return:
         """
         for check in self.checks:
             now = time.time()
             if check.status == 'queue':
+                check.con = None
+
                 # Ok we launch it
                 check.status = 'launched'
                 check.check_time = now
@@ -563,14 +559,14 @@ class NrpePoller(BaseModule):
                     (host, port, unknown_on_timeout,
                      command, timeout, use_ssl, add_args) = args
                 else:
-                    # Set an error so we will quit tis check
+                    # Set an error so we will quit this check
                     command = None
 
                 # If we do not have the good args, we bail out for this check
                 if host is None:
                     check.status = 'done'
                     check.exit_status = 2
-                    check.get_outputs('Error: the parameters host is not correct.', 8012)
+                    check.get_outputs('Error: the host parameter is not correct.', 8012)
                     check.execution_time = 0
                     continue
 
