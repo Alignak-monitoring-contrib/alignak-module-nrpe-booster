@@ -644,9 +644,7 @@ class NrpePoller(BaseModule):
         to see the real work, look at do_work
         """
         try:
-            print("Calling do_work ...")
             self.do_work(s, returns_queue, c)
-            print("Exiting do_work ...")
         except Exception as err:
             logger.exception("Got an unhandled exception: %s", err)
             # Ok I die now
@@ -661,7 +659,6 @@ class NrpePoller(BaseModule):
         :return:
         """
         logger.info("Module started!")
-        print("Module started ...")
         # restore default signal handler for the workers:
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
@@ -693,7 +690,7 @@ class NrpePoller(BaseModule):
             except Queue.Empty:
                 pass
             else:
-                print("Got message: %s", msg.__dict__)
+                logger.debug("Got message: %s", msg.__dict__)
                 if msg.get_type() == 'Die':
                     logger.info("[NRPEPoller] Dad says we should die...")
                     break
