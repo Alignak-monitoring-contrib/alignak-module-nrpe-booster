@@ -99,8 +99,10 @@ properties = {
     'phases': ['running'],
 
     'external': False,
-    # To be a real worker module, you must set this
+
+    # To be a real worker module, we must set this
     'worker_capable': True,
+    'type': 'nrpe-poller'
 }
 
 
