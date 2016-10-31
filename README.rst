@@ -1,20 +1,20 @@
-Alignak Web services Module
+Alignak NRPE booster Module
 ===========================
 
-*Alignak Web services module*
+*Alignak NRPE booster module*
 
 Build status (stable release)
 -----------------------------
 
-.. image:: https://travis-ci.org/Alignak-monitoring-contrib/alignak-module-ws.svg?branch=master
-    :target: https://travis-ci.org/Alignak-monitoring-contrib/alignak-module-ws
+.. image:: https://travis-ci.org/Alignak-monitoring-contrib/alignak-module-nrpe-booster.svg?branch=master
+    :target: https://travis-ci.org/Alignak-monitoring-contrib/alignak-module-nrpe-booster
 
 
 Build status (development release)
 ----------------------------------
 
-.. image:: https://travis-ci.org/Alignak-monitoring-contrib/alignak-module-ws.svg?branch=develop
-    :target: https://travis-ci.org/Alignak-monitoring-contrib/alignak-module-ws
+.. image:: https://travis-ci.org/Alignak-monitoring-contrib/alignak-module-nrpe-booster.svg?branch=develop
+    :target: https://travis-ci.org/Alignak-monitoring-contrib/alignak-module-nrpe-booster
 
 
 Short description
@@ -78,7 +78,7 @@ Tag the NRPE commands with the `module_type` parameter::
 Bugs, issues and contributing
 -----------------------------
 
-Please report any issue using the project `GitHub repository: <https://github.com/Alignak-monitoring-contrib/alignak-module-ws/issues>`_.
+Please report any issue using the project `GitHub repository: <https://github.com/Alignak-monitoring-contrib/alignak-module-nrpe-booster/issues>`_.
 
 License
 -------
