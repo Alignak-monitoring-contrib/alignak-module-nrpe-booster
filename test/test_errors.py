@@ -360,11 +360,10 @@ class Test_Errors(NrpePollerTestMixin, AlignakTest):
 
         my_module.manage_finished_checks()
 
-        self.assert_log_match(
+        self.assert_any_log_match(
             re.escape(
-                '%s: Successfully retried check :)'
-                % (chk.command)
-            ), 1
+                '%s: Successfully retried check' % (chk.command)
+            )
         )
 
         self.assertEqual(

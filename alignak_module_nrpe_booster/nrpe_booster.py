@@ -60,13 +60,7 @@ import signal
 import Queue
 import shlex
 
-# Used for the main function to run module independently
-from alignak.objects.module import Module
-from alignak.modulesmanager import ModulesManager
-
 from alignak.basemodule import BaseModule
-from alignak.http.daemon import HTTPDaemon
-from alignak.external_command import ExternalCommand
 
 COMMUNICATION_ERRORS = (socket.error,)
 
@@ -211,7 +205,7 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
         self.readwrite_error = False  # there was an error at the tcp level..
 
         # Instantiate our nrpe helper
-        self.nrpe = NRPE(host, port, use_ssl, msg)
+        self.nrpe = NRPE(host, port, self.use_ssl, msg)
         self.socket = None
 
         # And now we create a socket for our connection
@@ -223,7 +217,7 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
 
         self.create_socket(addrinfo[0], socket.SOCK_STREAM)
 
-        if use_ssl:
+        if self.use_ssl:
             # The admin want a ssl connection,
             # but there is not openssl lib installed :(
             if OpenSSL is None:
@@ -291,6 +285,7 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
             sock = self.socket
         try:
             # Also always shutdown the underlying socket:
+            # pylint: disable=too-many-function-args
             sock.shutdown(socket.SHUT_RDWR)
         except socket.error as err:
             logger.debug('socket.shutdown failed: %s', str(err))
@@ -397,8 +392,7 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
                 # still not finished, we continue
                 pass
         else:
-            # Maybe we did not send all our query
-            # so we bufferize it
+            # Maybe we did not sent all our query so we bufferize it
             self.nrpe.query = self.nrpe.query[sent:]
 
     def is_done(self):
@@ -433,6 +427,30 @@ def parse_args(cmd_args):
     add_args = []
 
     # Manage the options
+    # Example: ['-H', '93.93.47.83', '-t', '-u', '-c', 'check_load']
+    # Got this from NRPE:
+    # NRPE Plugin for Nagios Copyright (c) 1999-2008 Ethan Galstad (nagios@nagios.org)
+    # Version: 2.15 Last Modified: 09-06-2013 License: GPL v2 with exemptions (-l for more info)
+    # Usage: check_nrpe -H [ -b ] [-4] [-6] [-n] [-u] [-p ] [-t ] [-c ] [-a ]
+    # Options:
+    # -n = Do no use SSL
+    # -u = Make socket timeouts return an UNKNOWN state instead of CRITICAL
+    # = The address of the host running the NRPE daemon
+    # = bind to local address
+    # -4 = user ipv4 only
+    # -6 = user ipv6 only
+    # [port] = The port on which the daemon is running (default=5666)
+    # [timeout] = Number of seconds before connection times out (default=10)
+    # [command] = The name of the command that the remote daemon should run
+    # [arglist] = Optional arguments that should be passed to the command.
+    # Multiple arguments should be separated by a space. If provided, this must be the last
+    # option supplied on the command line.
+    # Note: This plugin requires that you have the NRPE daemon running on the remote host.
+    # You must also have configured the daemon to associate a specific plugin command with the
+    # [command] option you are specifying here. Upon receipt of the [command] argument,
+    # the NRPE daemon will run the appropriate plugin command and send the plugin output and
+    # return code back to *this* plugin. This allows you to execute plugins on remote hosts
+    # and 'fake' the results to make Nagios think the plugin is being run locally.
     try:
         opts, args = getopt.getopt(cmd_args, "H::p::nut::c::a::", [])
     except getopt.GetoptError as err:
@@ -559,8 +577,10 @@ class NrpePoller(BaseModule):
                 if len(clean_command) > 1:
                     # we do not want the first member, check_nrpe thing
                     args = parse_args(clean_command[1:])
-                    (host, port, unknown_on_timeout,
-                     command, timeout, use_ssl, add_args) = args
+                    (host, port, unknown_on_timeout, command, timeout, use_ssl, add_args) = args
+                    logger.debug("Parsed arguments: %s / %s / %s / %s / %s / %s / %s",
+                                 host, port, unknown_on_timeout, command, timeout, use_ssl,
+                                 add_args)
                 else:
                     # Set an error so we will quit this check
                     command = None
@@ -582,9 +602,8 @@ class NrpePoller(BaseModule):
                 total_args = [command]
                 total_args.extend(add_args)
                 cmd = r'!'.join(total_args)
-                logger.debug("Launch NRPE check: %s", cmd)
-                check.con = NRPEAsyncClient(host, port, use_ssl,
-                                            timeout, unknown_on_timeout, cmd)
+                logger.info("Launch NRPE check: %s", cmd)
+                check.con = NRPEAsyncClient(host, port, use_ssl, timeout, unknown_on_timeout, cmd)
 
     def manage_finished_checks(self):
         """
@@ -657,7 +676,7 @@ class NrpePoller(BaseModule):
         :param c: control queue for the worker
         :return:
         """
-        logger.info("Module started!")
+        logger.debug("Module worker started!")
         # restore default signal handler for the workers:
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
@@ -693,18 +712,3 @@ class NrpePoller(BaseModule):
                 if msg.get_type() == 'Die':
                     logger.info("[NRPEPoller] Dad says we should die...")
                     break
-
-if __name__ == '__main__':
-    # Create an Alignak module
-    mod = Module({
-        'module_alias': 'nrpe-booster',
-        'module_types': 'checks',
-        'python_name': 'alignak_module_nrpe_booster',
-    })
-    # Create the modules manager for a daemon type
-    modulemanager = ModulesManager('poller', None)
-    # Load and initialize the module
-    modulemanager.load_and_init([mod])
-    my_module = modulemanager.instances[0]
-    # Start external modules
-    modulemanager.start_external_instances()

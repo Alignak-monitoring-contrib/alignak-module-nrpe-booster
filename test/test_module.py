@@ -112,7 +112,7 @@ class TestModuleNrpeBooster(AlignakTest):
         ), 0)
         self.assert_log_match(re.escape(
             "Module properties: {'daemons': ['poller'], 'phases': ['running'], "
-            "'type': 'checks', 'external': False, 'worker_capable': True}"
+            "'type': 'nrpe_poller', 'external': False, 'worker_capable': True}"
         ), 1)
         self.assert_log_match(re.escape(
             "Imported 'alignak_module_nrpe_booster' for nrpe-booster"
