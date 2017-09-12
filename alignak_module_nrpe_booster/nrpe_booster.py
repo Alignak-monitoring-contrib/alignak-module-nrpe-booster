@@ -427,30 +427,41 @@ def parse_args(cmd_args):
     add_args = []
 
     # Manage the options
-    # Example: ['-H', '93.93.47.83', '-t', '-u', '-c', 'check_load']
-    # Got this from NRPE:
-    # NRPE Plugin for Nagios Copyright (c) 1999-2008 Ethan Galstad (nagios@nagios.org)
-    # Version: 2.15 Last Modified: 09-06-2013 License: GPL v2 with exemptions (-l for more info)
-    # Usage: check_nrpe -H [ -b ] [-4] [-6] [-n] [-u] [-p ] [-t ] [-c ] [-a ]
+    # NRPE Plugin for Nagios
+    # Copyright (c) 1999-2008 Ethan Galstad (nagios@nagios.org)
+    # Version: 2.15
+    # Last Modified: 09-06-2013
+    # License: GPL v2 with exemptions (-l for more info)
+
+    # Usage: check_nrpe -H <host> [ -b <bindaddr> ]
+    #                   [-4] [-6] [-n] [-u]
+    #                   [-p <port>] [-t <timeout>]
+    #                   [-c <command>] [-a <arglist...>]
+
     # Options:
-    # -n = Do no use SSL
-    # -u = Make socket timeouts return an UNKNOWN state instead of CRITICAL
-    # = The address of the host running the NRPE daemon
-    # = bind to local address
-    # -4 = user ipv4 only
-    # -6 = user ipv6 only
-    # [port] = The port on which the daemon is running (default=5666)
-    # [timeout] = Number of seconds before connection times out (default=10)
-    # [command] = The name of the command that the remote daemon should run
-    # [arglist] = Optional arguments that should be passed to the command.
-    # Multiple arguments should be separated by a space. If provided, this must be the last
-    # option supplied on the command line.
-    # Note: This plugin requires that you have the NRPE daemon running on the remote host.
-    # You must also have configured the daemon to associate a specific plugin command with the
-    # [command] option you are specifying here. Upon receipt of the [command] argument,
-    # the NRPE daemon will run the appropriate plugin command and send the plugin output and
-    # return code back to *this* plugin. This allows you to execute plugins on remote hosts
-    # and 'fake' the results to make Nagios think the plugin is being run locally.
+    #  -n         = Do no use SSL
+    #  -u         = Make socket timeouts return an UNKNOWN state instead of CRITICAL
+    #  <host>     = The address of the host running the NRPE daemon
+    #  <bindaddr> = bind to local address
+    #  -4         = user ipv4 only
+    #  -6         = user ipv6 only
+    #  [port]     = The port on which the daemon is running (default=5666)
+    #  [timeout]  = Number of seconds before connection times out (default=10)
+    #  [command]  = The name of the command that the remote daemon should run
+    #  [arglist]  = Optional arguments that should be passed to the command.  Multiple
+    #               arguments should be separated by a space.  If provided, this must be
+    #               the last option supplied on the command line.
+
+    # Note:
+    # This plugin requires that you have the NRPE daemon running on the remote host.
+    # You must also have configured the daemon to associate a specific plugin command
+    # with the [command] option you are specifying here.  Upon receipt of the
+    # [command] argument, the NRPE daemon will run the appropriate plugin command and
+    # send the plugin output and return code back to *this* plugin.  This allows you
+    # to execute plugins on remote hosts and 'fake' the results to make Nagios think
+    # the plugin is being run locally.
+
+    logger.debug("Received arguments: %s", cmd_args)
     try:
         opts, args = getopt.getopt(cmd_args, "H::p::nut::c::a::", [])
     except getopt.GetoptError as err:
@@ -458,23 +469,30 @@ def parse_args(cmd_args):
         logger.exception("Could not parse a command: %s", err)
         return None, port, unknown_on_timeout, command, timeout, use_ssl, add_args
 
-    for o, a in opts:
-        if o == "-H":
-            host = a
-        elif o == "-p":
-            port = int(a)
-        elif o == "-c":
-            command = a
-        elif o == '-t':
-            timeout = int(a)
-        elif o == '-u':
-            unknown_on_timeout = True
-        elif o == '-n':
-            use_ssl = False
-        elif o == '-a':
-            # Here we got a, btu also all 'args'
-            add_args.append(a)
-            add_args.extend(args)
+    logger.debug("Parsed arguments: opts = %s, args = %s", opts, args)
+    try:
+        for o, a in opts:
+            if o == "-H":
+                host = a
+            elif o == "-p":
+                port = int(a)
+            elif o == "-c":
+                command = a
+            elif o == '-t':
+                timeout = int(a)
+            elif o == '-u':
+                unknown_on_timeout = True
+            elif o == '-n':
+                use_ssl = False
+            elif o == '-a':
+                # Here we got a, btu also all 'args'
+                add_args.append(a)
+                add_args.extend(args)
+    except ValueError as err:
+        # If we got problem, bail out - say host is None
+        logger.error("Could not parse command parameters: %s", cmd_args)
+        logger.error("Check the module and command configuration (macros, ...)")
+        return None, port, unknown_on_timeout, command, timeout, use_ssl, add_args
 
     return host, port, unknown_on_timeout, command, timeout, use_ssl, add_args
 
