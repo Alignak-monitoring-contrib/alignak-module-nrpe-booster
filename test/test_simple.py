@@ -98,13 +98,13 @@ class TestNrpePoller(NrpePollerTestMixin, AlignakTest):
         }
         c = Check(data)
 
-        msg = Message(_id=0, _type='Do', data=c)
+        msg = Message(_type='Do', data=c)
         to_queue.put(msg)
 
         # The worker will read a message by loop. We want it to do 2 loops,
         # so we fake a message, and the second message is a real exit one
-        msg1 = Message(_id=0, _type='Continue')
-        msg2 = Message(_id=0, _type='Die')
+        msg1 = Message(_type='Continue')
+        msg2 = Message(_type='Die')
         control_queue.put(msg1)
         for _ in xrange(1, 2):
             control_queue.put(msg1)
