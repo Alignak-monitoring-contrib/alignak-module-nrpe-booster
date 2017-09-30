@@ -29,5 +29,24 @@ after_success:
   # execute coveralls from the base directory of the project,
   # so we need to move the .coverage file here :
   # mv test/.coverage . && coveralls --rcfile=test/.coveragerc -v
-  mv test/.coverage . && coveralls -v
+  - mv test/.coverage . && coveralls -v
+  - ./package.sh $TRAVIS_BRANCH $TRAVIS_PYTHON_VERSION
+
+deploy:
+  - provider: bintray
+    skip_cleanup: true
+    file: .bintray.json
+    user: ddurieux
+    key:
+      secure: "DlRsMTY1MY3yar+4csK6O1iKXPqZHLwcaLf7n3Ou3U+1+oa4UpSwRvk55QLx0hzIFvQnGesO43J3PvYKU5eETMTqYWx4GZoN75ku61IbniZquBfqwLz/fzO/QqDrB2z8lK3aqWFCDP5Ezkt30Xpuat4Asl1bqe4WVYZTIXNNfTP8PoPz+om1wBryNKUU2A6ihm9tmwrKn9VHxQric28oWDS4H/fVqLX1ZtbejZhUPbfrFol6Lx2o3x7InrY+lGjZH05isdxMnSpdUwr54A3hmOaQo24maH43d3W+pKdb96Y7qyNAJ29nX2BAhiZL7G8MEvM8iLWsPQ3VkrPEzhv946LL4jRhDshc0wN15KktlGDiULYY1+gcK6ZYVdvAsjayilWt7kHkFXpYTzURHDw8fDreFzCHLU9FnP0cp38KfCmlJ9cWYxe6dz+Hqwtssy42A4Ze8k8ZTbWM+IjwJ4LRi3YiTonysxlPbMDAJHsq0wSuCPDdhQ3vaABuwlGAiQAxhHY8jsJvQYcNgMq6VDjfgDFmcJRHOCXn6OK7bU8rbWxp79F4rabVYAPN7a0cfAdhTgJXLepWIOHo+EVAMlqllQWiko1BLWhPkOcx07dcIuBWiP2ivdUeGB4yxNvyJyYh2phrnaN2nsuVOt34JjUj/ZwDhE6Be8SgM6XxItTYK4I="
+    on:
+      branch: develop
+  - provider: bintray
+    skip_cleanup: true
+    file: .bintray.json
+    user: ddurieux
+    key:
+      secure: "DlRsMTY1MY3yar+4csK6O1iKXPqZHLwcaLf7n3Ou3U+1+oa4UpSwRvk55QLx0hzIFvQnGesO43J3PvYKU5eETMTqYWx4GZoN75ku61IbniZquBfqwLz/fzO/QqDrB2z8lK3aqWFCDP5Ezkt30Xpuat4Asl1bqe4WVYZTIXNNfTP8PoPz+om1wBryNKUU2A6ihm9tmwrKn9VHxQric28oWDS4H/fVqLX1ZtbejZhUPbfrFol6Lx2o3x7InrY+lGjZH05isdxMnSpdUwr54A3hmOaQo24maH43d3W+pKdb96Y7qyNAJ29nX2BAhiZL7G8MEvM8iLWsPQ3VkrPEzhv946LL4jRhDshc0wN15KktlGDiULYY1+gcK6ZYVdvAsjayilWt7kHkFXpYTzURHDw8fDreFzCHLU9FnP0cp38KfCmlJ9cWYxe6dz+Hqwtssy42A4Ze8k8ZTbWM+IjwJ4LRi3YiTonysxlPbMDAJHsq0wSuCPDdhQ3vaABuwlGAiQAxhHY8jsJvQYcNgMq6VDjfgDFmcJRHOCXn6OK7bU8rbWxp79F4rabVYAPN7a0cfAdhTgJXLepWIOHo+EVAMlqllQWiko1BLWhPkOcx07dcIuBWiP2ivdUeGB4yxNvyJyYh2phrnaN2nsuVOt34JjUj/ZwDhE6Be8SgM6XxItTYK4I="
+    on:
+      tags: true
 
