@@ -4,10 +4,17 @@
 -e git+https://github.com/Alignak-monitoring/alignak.git@develop#egg=alignak
 
 unittest2
-coveralls
-nose-cov
+
+# Use py.test as test-runner
+pytest
+pytest-cov
+# Makes some coverage report for the tests
 coverage
-nose
+# Report coverage results to coveralls.io
+coveralls
+
+# Static code and doc analysis libraries
 pylint
 pep8
 pep257
+
