@@ -1,6 +1,9 @@
 Alignak NRPE booster Module
 ===========================
 
+**Note** that this module is not yet tested with the most recent (> 2) version of Alignak.
+-----
+
 *Alignak NRPE booster module*
 
 .. image:: https://travis-ci.org/Alignak-monitoring-contrib/alignak-module-nrpe-booster.svg?branch=develop
