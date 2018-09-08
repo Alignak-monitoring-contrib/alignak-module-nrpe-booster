@@ -84,9 +84,12 @@ else:
     # both so to retry a check in such cases.
     # Look for 'retried' and 'readwrite_error' in the code..
 
-logger = logging.getLogger('alignak.module')  # pylint: disable=C0103
+# pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
+for handler in logger.parent.handlers:
+    if isinstance(handler, logging.StreamHandler):
+        logger.parent.removeHandler(handler)
 
-# pylint: disable=C0103
 properties = {
     'daemons': ['poller'],
     'type': 'nrpe_poller',
