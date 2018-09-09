@@ -23,8 +23,10 @@ import os
 import time
 import logging
 
+from builtins import range
+
 from multiprocessing import Queue, Manager
-from alignak_test import AlignakTest
+from .alignak_test import AlignakTest
 from alignak.check import Check
 
 try:
@@ -33,6 +35,7 @@ except ImportError:
     import unittest
 
 
+from alignak.daemons.pollerdaemon import Poller
 from alignak.modulesmanager import ModulesManager
 from alignak.objects.module import Module
 from alignak.message import Message
@@ -60,7 +63,12 @@ class NrpePollerTestMixin(object):
         })
 
         # Create the modules manager for a daemon type
-        self.modulemanager = ModulesManager('poller', None)
+        args = {
+            'env_file': self.env_filename, 'daemon_name': 'poller-master',
+        }
+        self._poller_daemon = Poller(**args)
+
+        self.modulemanager = ModulesManager(self._poller_daemon)
         # Load and initialize the modules
         self.modulemanager.load_and_init([mod])
         my_module = self.modulemanager.instances[0]
@@ -74,9 +82,8 @@ class TestNrpePoller(NrpePollerTestMixin, AlignakTest):
 
         :return:
         """
-        self.print_header()
         # Obliged to call to get a self.logger...
-        self.setup_with_file('cfg/cfg_default.cfg')
+        self.setup_with_file('cfg/alignak.cfg', 'cfg/alignak.ini')
         self.assertTrue(self.conf_is_correct)
 
         my_module = self._setup_nrpe()
@@ -99,6 +106,7 @@ class TestNrpePoller(NrpePollerTestMixin, AlignakTest):
         c = Check(data)
 
         msg = Message(_type='Do', data=c)
+        print(msg)
         to_queue.put(msg)
 
         # The worker will read a message by loop. We want it to do 2 loops,
@@ -106,7 +114,7 @@ class TestNrpePoller(NrpePollerTestMixin, AlignakTest):
         msg1 = Message(_type='Continue')
         msg2 = Message(_type='Die')
         control_queue.put(msg1)
-        for _ in xrange(1, 2):
+        for _ in range(1, 2):
             control_queue.put(msg1)
         control_queue.put(msg2)
 

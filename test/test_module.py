@@ -23,11 +23,9 @@ Test the module
 """
 
 import re
-import time
 
-from multiprocessing import Queue, Manager
-
-from alignak_test import AlignakTest, time_hacker
+from .alignak_test import AlignakTest
+from alignak.daemons.pollerdaemon import Poller
 from alignak.modulesmanager import ModulesManager
 from alignak.objects.module import Module
 from alignak.basemodule import BaseModule
@@ -48,45 +46,49 @@ class TestModuleNrpeBooster(AlignakTest):
 
         :return:
         """
-        self.print_header()
-        self.setup_with_file('./cfg/cfg_default.cfg')
+        self.setup_with_file('./cfg/alignak.cfg')
         self.assertTrue(self.conf_is_correct)
         self.show_configuration_logs()
 
         # No arbiter modules created
-        modules = [m.module_alias for m in self.arbiter.myself.modules]
+        modules = [m.module_alias for m in self._arbiter.link_to_myself.modules]
         self.assertListEqual(modules, [])
 
-        # The only existing broker module is logs declared in the configuration
-        modules = [m.module_alias for m in self.brokers['broker-master'].modules]
-        self.assertListEqual(modules, [])
-
-        # No poller module
-        modules = [m.module_alias for m in self.pollers['poller-master'].modules]
-        self.assertListEqual(modules, ['nrpe-booster'])
-
-        # No receiver module
-        modules = [m.module_alias for m in self.receivers['receiver-master'].modules]
-        self.assertListEqual(modules, [])
-
-        # No reactionner module
-        modules = [m.module_alias for m in self.reactionners['reactionner-master'].modules]
+        # No broker modules
+        modules = [m.module_alias for m in self._broker_daemon.modules]
         self.assertListEqual(modules, [])
 
         # No scheduler modules
-        modules = [m.module_alias for m in self.schedulers['scheduler-master'].modules]
+        modules = [m.module_alias for m in self._scheduler_daemon.modules]
+        self.assertListEqual(modules, ['inner-retention'])
+
+        # No receiver modules
+        modules = [m.module_alias for m in self._receiver.modules]
         self.assertListEqual(modules, [])
+
+        # A poller module
+        # Initialize a Poller daemon
+        self._poller = None
+        for poller in self._arbiter.dispatcher.pollers:
+            print("-----\nGot a poller: %s (%s)" % (poller.name, poller))
+            # Simulate the receiver daemon start
+            args = {
+                'env_file': self.env_filename, 'daemon_name': poller.name,
+            }
+            self._poller_daemon = Poller(**args)
+            self._poller = poller
+
+        modules = [m.module_alias for m in self._poller.modules]
+        self.assertListEqual(modules, ['nrpe-booster'])
 
     def test_module_manager(self):
         """
         Test if the module manager manages correctly all the modules
         :return:
         """
-        self.print_header()
-        self.setup_with_file('cfg/cfg_default.cfg')
+        self.setup_with_file('cfg/alignak.cfg')
         self.assertTrue(self.conf_is_correct)
-
-        time_hacker.set_real_time()
+        self.clear_logs()
 
         # Create an Alignak module
         mod = Module({
@@ -96,7 +98,12 @@ class TestModuleNrpeBooster(AlignakTest):
         })
 
         # Create the modules manager for a daemon type
-        self.modulemanager = ModulesManager('poller', None)
+        args = {
+            'env_file': self.env_filename, 'daemon_name': 'poller-master',
+        }
+        self._poller_daemon = Poller(**args)
+        # Create the modules manager for a daemon type
+        self.modulemanager = ModulesManager(self._poller_daemon)
 
         # Clear logs
         self.clear_logs()
@@ -110,10 +117,11 @@ class TestModuleNrpeBooster(AlignakTest):
         self.assert_log_match(re.escape(
             "Importing Python module 'alignak_module_nrpe_booster' for nrpe-booster..."
         ), 0)
-        self.assert_log_match(re.escape(
-            "Module properties: {'daemons': ['poller'], 'phases': ['running'], "
-            "'type': 'nrpe_poller', 'external': False, 'worker_capable': True}"
-        ), 1)
+        # Dictionary order is not the same in Python 2 / 3!
+        # self.assert_log_match(re.escape(
+        #     "Module properties: {'daemons': ['poller'], 'phases': ['running'], "
+        #     "'type': 'nrpe_poller', 'external': False, 'worker_capable': True}"
+        # ), 1)
         self.assert_log_match(re.escape(
             "Imported 'alignak_module_nrpe_booster' for nrpe-booster"
         ), 2)
@@ -121,12 +129,18 @@ class TestModuleNrpeBooster(AlignakTest):
             "Loaded Python module 'alignak_module_nrpe_booster' (nrpe-booster)"
         ), 3)
         self.assert_log_match(re.escape(
-            "Give an instance of alignak_module_nrpe_booster for alias: nrpe-booster"
+            "Alignak starting module 'nrpe-booster'"
         ), 4)
+        self.assert_log_match(re.escape(
+            "Give an instance of alignak_module_nrpe_booster for alias: nrpe-booster"
+        ), 5)
+        self.assert_log_match(re.escape(
+            "configuration, maximum output length: 8192"
+        ), 6)
 
         # Starting internal module logs
-        self.assert_log_match("Trying to initialize module: nrpe-booster", 5)
-        self.assert_log_match("Initialization of the NRPE poller module", 6)
+        self.assert_log_match("Trying to initialize module: nrpe-booster", 7)
+        self.assert_log_match("Initialization of the NRPE poller module", 8)
 
         my_module = self.modulemanager.instances[0]
 
@@ -152,16 +166,16 @@ class TestModuleNrpeBooster(AlignakTest):
         self.modulemanager.stop_all()
         # Stopping module logs
 
-        self.assert_log_match("Ending the NRPE poller module", 0)
+        self.assert_log_match("Shutting down modules...", 0)
+        self.assert_log_match("Ending the NRPE poller module", 1)
 
     def test_module_start_default(self):
         """
         Test the module initialization function, no parameters, using default
         :return:
         """
-        self.print_header()
         # Obliged to call to get a self.logger...
-        self.setup_with_file('cfg/cfg_default.cfg')
+        self.setup_with_file('cfg/alignak.cfg')
         self.assertTrue(self.conf_is_correct)
 
         # -----
