@@ -47,6 +47,7 @@
 This module is an Alignak Poller module that allows to bypass the launch of the check_nrpe process.
 """
 
+import os
 import re
 import sys
 import time
@@ -57,7 +58,7 @@ import binascii
 import asyncore
 import logging
 import signal
-import Queue
+import queue
 import shlex
 
 from alignak.basemodule import BaseModule
@@ -73,20 +74,22 @@ except ImportError as openssl_import_error:
     SSLWantReadOrWrite = None
 else:
     SSLError = OpenSSL.SSL.Error
-    SSLWantReadOrWrite = (OpenSSL.SSL.WantReadError,
-                          OpenSSL.SSL.WantWriteError)
+    SSLWantReadOrWrite = (OpenSSL.SSL.WantReadError, OpenSSL.SSL.WantWriteError)
 
     # consider SSLError's to also be a kind of communication error.
     COMMUNICATION_ERRORS += (SSLError,)
     # effectively, under SSL mode, any TCP reset or such failure
     # will be raised as such an instance of SSLError, which isn't
-    # a subclass of IOError nor socket.error but we want to catch
+    # a subclass of IOError nor OSError but we want to catch
     # both so to retry a check in such cases.
     # Look for 'retried' and 'readwrite_error' in the code..
 
-logger = logging.getLogger('alignak.module')  # pylint: disable=C0103
+# pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
+for handler in logger.parent.handlers:
+    if isinstance(handler, logging.StreamHandler):
+        logger.parent.removeHandler(handler)
 
-# pylint: disable=C0103
 properties = {
     'daemons': ['poller'],
     'type': 'nrpe_poller',
@@ -115,7 +118,7 @@ NRPE_DATA_PACKET_SIZE = 1034  # REALLY important .. !
 
 
 # pylint: disable=too-few-public-methods
-class NRPE(object):
+class NRPE():
     """
     NRPE protocol
     """
@@ -142,13 +145,21 @@ class NRPE(object):
         self.message = ''
         crc = 0
 
-        # We pack it, then we compute CRC32 of this first query
-        query = struct.pack(">2hih1024scc", 02, 01, crc, 0, command, 'N', 'D')
-        crc = binascii.crc32(query)
+        if not isinstance(command, bytes):
+            command = command.encode('utf8')
 
-        # we restart with the crc value this time
-        # because python2.4 do not have pack_into.
-        self.query = struct.pack(">2hih1024scc", 02, 01, crc, 0, command, 'N', 'D')
+        # We pack it, then we compute CRC32 of this first query
+        try:
+            query = struct.pack(">2hIh1024scc", 0x2, 0x1, crc, 0x00, command, b'N', b'D')
+        except struct.error:
+            logger.error("Packet encoding failed for: %s", str(command))
+            return
+
+        # CRC computing as an unsigned integer (compatibility Python 2 / 3)
+        crc = binascii.crc32(query) & 0xffffffff
+
+        # we repack with the crc value this time
+        self.query = struct.pack(">2hIh1024scc", 0x2, 0x1, crc, 0x0, command, b'N', b'D')
 
     def read(self, data):
         """
@@ -158,29 +169,34 @@ class NRPE(object):
         """
         # TODO: Not sure to get all the data in one shot.
         # TODO we should buffer it until we get enough to unpack.
-
-        if self.state == 'received':
+        logger.debug("State: %s, received data: %s", self.state, data)
+        if self.state in ['received']:
+            logger.debug("State: %s, exit: %s, message: %s", self.state, self.rc, self.message)
             return self.rc, self.message
 
         self.state = 'received'
-        # TODO: check crc
 
         try:
-            response = struct.unpack(">2hih1024s", data)
-        except struct.error as err:  # bad format...
+            logger.debug("Unpacking data: %s", data)
+            p_version, p_type, p_crc, p_rc, p_message = struct.unpack(">2hIh1024s", data)
+        except Exception as err:  # bad format...
+            logger.error("Packet decoding failed: %s", err)
             self.rc = 3
             self.message = ("Error : cannot unpack output ; "
                             "datalen=%s : err=%s" % (len(data), err))
         else:
-            self.rc = response[3]
-            # the output is padded with \x00 at the end so
-            # we remove it.
-            self.message = re.sub('\x00.*$', '', response[4])
-            # crc_orig = response[2]
+            logger.debug("Got: version=%s, type=%s, crc=%s, code=%s, message=%s",
+                         p_version, p_type, p_crc, p_rc, p_message)
+            self.rc = p_rc
+            # the output is padded with \x00 at the end so we remove it.
+            self.message = re.sub(b'\x00.*$', b'', p_message)
+            # TODO: check crc
 
+        logger.debug("Exit code: %s, message: %s", self.rc, self.message)
         return self.rc, self.message
 
 
+# pylint: disable=useless-object-inheritance
 class NRPEAsyncClient(asyncore.dispatcher, object):
     """
     NRPE client
@@ -200,6 +216,7 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
 
         self.use_ssl = use_ssl
         self.start_time = time.time()
+        self.execution_time = -1
         self.timeout = timeout
         self._rc_on_timeout = 3 if unknown_on_timeout else 2
         self.readwrite_error = False  # there was an error at the tcp level..
@@ -211,7 +228,7 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
         # And now we create a socket for our connection
         try:
             addrinfo = socket.getaddrinfo(host, port)[0]
-        except socket.error as err:
+        except Exception as err:
             self.set_exit(2, "Cannot getaddrinfo: %s" % err)
             return
 
@@ -229,11 +246,12 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
             else:
                 self.wrap_ssl()
 
-        addr = (host, port)
+        address = (host, port)
+        logger.debug("Connecting: %s", address)
         try:
-            self.connect(addr)
-        except socket.error as err:
-            self.set_exit(2, "Cannot connect to %s: %s" % (addr, err))
+            self.connect(address)
+        except Exception as err:
+            self.set_exit(2, "Cannot connect to %s: %s" % (address, err))
         else:
             self.rc = 3
             self.message = 'Sending request and waiting response...'
@@ -287,7 +305,7 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
             # Also always shutdown the underlying socket:
             # pylint: disable=too-many-function-args
             sock.shutdown(socket.SHUT_RDWR)
-        except socket.error as err:
+        except OSError as err:
             logger.debug('socket.shutdown failed: %s', str(err))
         super(NRPEAsyncClient, self).close()
         self.socket = None
@@ -313,8 +331,7 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
         """
         now = time.time()
         if now - self.start_time > self.timeout:
-            message = ('Error: connection timeout after %d seconds'
-                       % self.timeout)
+            message = ("Error: connection timeout after %d seconds" % self.timeout)
             self.set_exit(self._rc_on_timeout, message)
 
     def handle_read(self):
@@ -352,6 +369,7 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
             # or our arguments...)
             if buf:
                 rc, message = self.nrpe.read(buf)
+                logger.debug("Got, exit code: %s, message: %s", self.rc, self.message)
             else:
                 rc = 2
                 message = "Error: Empty response from the NRPE server. Are we blacklisted ?"
@@ -466,10 +484,10 @@ def parse_args(cmd_args):
         opts, args = getopt.getopt(cmd_args, "H::p::nut::c::a::", [])
     except getopt.GetoptError as err:
         # If we got problem, bail out - say host is None
-        logger.exception("Could not parse a command: %s", err)
+        logger.info("Could not parse a command: %s", err)
         return None, port, unknown_on_timeout, command, timeout, use_ssl, add_args
 
-    logger.debug("Parsed arguments: opts = %s, args = %s", opts, args)
+    logger.debug("Parsing arguments: opts = %s, args = %s", opts, args)
     try:
         for o, a in opts:
             if o == "-H":
@@ -485,7 +503,7 @@ def parse_args(cmd_args):
             elif o == '-n':
                 use_ssl = False
             elif o == '-a':
-                # Here we got a, btu also all 'args'
+                # Here we got a, but also all 'args'
                 add_args.append(a)
                 add_args.extend(args)
     except ValueError as err:
@@ -520,6 +538,13 @@ class NrpePoller(BaseModule):
         logger.debug("inner properties: %s", self.__dict__)
         logger.debug("received configuration: %s", mod_conf.__dict__)
         logger.debug("loaded into: %s", self.loaded_into)
+
+        try:
+            self.max_plugins_output_length = int(
+                getattr(mod_conf, 'max_plugins_output_length', '8192'))
+        except ValueError:
+            self.max_plugins_output_length = 8192
+        logger.info("configuration, maximum output length: %d", self.max_plugins_output_length)
 
         self.checks = []
 
@@ -567,61 +592,71 @@ class NrpePoller(BaseModule):
         while True:
             try:
                 msg = self.s.get(block=False)
-            except Queue.Empty:
+            except queue.Empty:
                 return
             if msg is not None:
                 check = msg.get_data()
                 self.add_new_check(check)
 
     def launch_new_checks(self):
+        # pylint: disable=too-many-locals
         """
         Launch the new received checks
         :return:
         """
         for check in self.checks:
             now = time.time()
-            if check.status == 'queue':
-                check.con = None
+            if check.status not in ['queue']:
+                continue
 
-                # Ok we launch it
-                check.status = 'launched'
-                check.check_time = now
+            check.con = None
 
-                # We want the args of the commands so we parse it like a shell
-                # shlex want str only
+            # Ok we launch it
+            check.status = 'launched'
+            check.check_time = now
+
+            # We want the args of the commands so we parse it like a shell
+            # shlex want str only
+            try:
                 clean_command = shlex.split(check.command.encode('utf8', 'ignore'))
+            except AttributeError:
+                clean_command = shlex.split(check.command)
 
-                # If the command seems good
-                if len(clean_command) > 1:
-                    # we do not want the first member, check_nrpe thing
-                    args = parse_args(clean_command[1:])
-                    (host, port, unknown_on_timeout, command, timeout, use_ssl, add_args) = args
-                    logger.debug("Parsed arguments: %s / %s / %s / %s / %s / %s / %s",
-                                 host, port, unknown_on_timeout, command, timeout, use_ssl,
-                                 add_args)
-                else:
-                    # Set an error so we will quit this check
-                    command = None
+            # If the command seems good
+            if len(clean_command) > 1:
+                # we do not want the first member, check_nrpe thing
+                args = parse_args(clean_command[1:])
+                (host, port, unknown_on_timeout, command, timeout, use_ssl, add_args) = args
+                logger.debug("Parsed arguments: %s / %s / %s / %s / %s / %s / %s",
+                             host, port, unknown_on_timeout, command, timeout, use_ssl,
+                             add_args)
+            else:
+                # Set an error so we will quit this check
+                command = None
 
-                # If we do not have the good args, we bail out for this check
-                if host is None:
-                    check.status = 'done'
-                    check.exit_status = 2
-                    check.get_outputs('Error: the host parameter is not correct.', 8012)
-                    check.execution_time = 0
-                    continue
+            # If we do not have the good args, we bail out for this check
+            if host is None:
+                check.status = 'done'
+                check.exit_status = 2
+                check.get_outputs('Error: the host parameter is not correct.',
+                                  self.max_plugins_output_length)
+                check.execution_time = 0
+                continue
 
-                # if no command is specified, check_nrpe
-                # sends _NRPE_CHECK as default command.
-                if command is None:
-                    command = '_NRPE_CHECK'
+            # if no command is specified, check_nrpe
+            # sends _NRPE_CHECK as default command.
+            if command is None:
+                command = '_NRPE_CHECK'
 
-                # Ok we are good, we go on
-                total_args = [command]
-                total_args.extend(add_args)
-                cmd = r'!'.join(total_args)
-                logger.info("Launch NRPE check: %s", cmd)
-                check.con = NRPEAsyncClient(host, port, use_ssl, timeout, unknown_on_timeout, cmd)
+            # Ok we are good, we go on
+            total_args = [command]
+            total_args.extend(add_args)
+            cmd = r'!'.join(total_args)
+            log_function = logger.debug
+            if 'ALIGNAK_LOG_ACTIONS' in os.environ:
+                log_function = logger.info
+            log_function("Launch NRPE check: %s", cmd)
+            check.con = NRPEAsyncClient(host, port, use_ssl, timeout, unknown_on_timeout, cmd)
 
     def manage_finished_checks(self):
         """
@@ -661,7 +696,12 @@ class NrpePoller(BaseModule):
 
                 check.status = 'done'
                 check.exit_status = con.rc
-                check.get_outputs(con.message, 8012)
+                try:
+                    con.message = con.message.decode("utf-8")
+                except AttributeError:
+                    pass
+
+                check.get_outputs(con.message, self.max_plugins_output_length)
                 check.execution_time = con.execution_time
 
                 # and set this check for deleting
@@ -723,7 +763,7 @@ class NrpePoller(BaseModule):
             # Now get order from master, if any..
             try:
                 msg = c.get(block=False)
-            except Queue.Empty:
+            except queue.Empty:
                 pass
             else:
                 logger.debug("Got message: %s", msg.__dict__)
