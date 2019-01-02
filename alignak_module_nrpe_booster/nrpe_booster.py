@@ -62,8 +62,10 @@ import queue
 import shlex
 
 from alignak.basemodule import BaseModule
+from alignak.misc.common import setproctitle, SIGNALS_TO_NAMES_DICT
+from alignak.message import Message
 
-COMMUNICATION_ERRORS = (socket.error,)
+COMMUNICATION_ERRORS = (OSError)
 
 # pylint: disable=wrong-import-position,invalid-name
 try:
@@ -77,15 +79,14 @@ else:
     SSLWantReadOrWrite = (OpenSSL.SSL.WantReadError, OpenSSL.SSL.WantWriteError)
 
     # consider SSLError's to also be a kind of communication error.
-    COMMUNICATION_ERRORS += (SSLError,)
+    COMMUNICATION_ERRORS = (OSError, SSLError)
     # effectively, under SSL mode, any TCP reset or such failure
     # will be raised as such an instance of SSLError, which isn't
     # a subclass of IOError nor OSError but we want to catch
     # both so to retry a check in such cases.
     # Look for 'retried' and 'readwrite_error' in the code..
 
-# pylint: disable=invalid-name
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 for handler in logger.parent.handlers:
     if isinstance(handler, logging.StreamHandler):
         logger.parent.removeHandler(handler)
@@ -201,8 +202,12 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
     """
     NRPE client
     """
+    # Auto generated identifiers
+    _id = 1
+
     # pylint: disable=too-many-arguments
-    def __init__(self, host, port, use_ssl, timeout, unknown_on_timeout, msg):
+    def __init__(self, host, port, use_ssl, timeout, unknown_on_timeout, msg,
+                 ssl_version, ssl_ciphers_list):
         """
 
         :param host:
@@ -214,12 +219,21 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
         """
         asyncore.dispatcher.__init__(self)
 
+        # My unique identifier
+        cls = self.__class__
+        self._id = cls._id
+        cls._id += 1
+
         self.use_ssl = use_ssl
+        self.ssl_version = ssl_version
+        self.ssl_ciphers_list = ssl_ciphers_list
+
         self.start_time = time.time()
         self.execution_time = -1
         self.timeout = timeout
         self._rc_on_timeout = 3 if unknown_on_timeout else 2
         self.readwrite_error = False  # there was an error at the tcp level..
+        self.exited = False
 
         # Instantiate our nrpe helper
         self.nrpe = NRPE(host, port, self.use_ssl, msg)
@@ -238,16 +252,15 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
             # The admin want a ssl connection,
             # but there is not openssl lib installed :(
             if OpenSSL is None:
-                logger.warning("Python openssl lib is not installed! "
-                               "Cannot use ssl, switching back to no-ssl mode; "
-                               "original import error: %s",
+                logger.warning("Python openssl lib is not installed! Cannot use SSL, "
+                               "switching back to no-ssl mode; original import error: %s",
                                openssl_import_error)
                 self.use_ssl = False
             else:
-                self.wrap_ssl()
+                self.wrap_ssl(getattr(OpenSSL.SSL, "%s_METHOD" % ssl_version), ssl_ciphers_list)
 
         address = (host, port)
-        logger.debug("Connecting: %s", address)
+        logger.debug("%s - connecting: %s", self._id, address)
         try:
             self.connect(address)
         except Exception as err:
@@ -256,13 +269,16 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
             self.rc = 3
             self.message = 'Sending request and waiting response...'
 
-    def wrap_ssl(self):
+    def wrap_ssl(self, ssl_version, ssl_ciphers_list):
         """
 
         :return:
         """
-        self.context = OpenSSL.SSL.Context(OpenSSL.SSL.TLSv1_METHOD)
-        self.context.set_cipher_list('ADH')
+        logger.debug('%s - SSL connection: %s / %s', self._id, ssl_version, ssl_ciphers_list)
+        # One of SSLv2_METHOD, SSLv3_METHOD, SSLv23_METHOD, or TLSv1_METHOD.
+        self.context = OpenSSL.SSL.Context(ssl_version)
+        # ALL:!MD5:@STRENGTH:@SECLEVEL=0
+        self.context.set_cipher_list(ssl_ciphers_list)
         self._socket = self.socket  # keep the bare socket for later shutdown/close
         self.socket = OpenSSL.SSL.Connection(self.context, self.socket)
         self.set_accept_state()
@@ -274,13 +290,17 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
         """
         if self.socket is None:
             return
+
+        logger.debug("%s - closing...", self._id)
+
         if self.use_ssl:
-            for _ in range(4):
+            for idx in range(1):
                 try:
                     if self.socket.shutdown():
                         break
-                except SSLWantReadOrWrite:
-                    pass  # just retry for now
+                except SSLWantReadOrWrite as err:
+                    logger.exception('Error on SSL shutdown : %s', err)
+                    # pass  # just retry for now
                     # or:
                     # asyncore.poll2(0.5)
                     # but not sure we really need it as the SSL shutdown()
@@ -290,25 +310,31 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
                     # 'reason' nor 'library' attribute or any other detail.
                     # despite the docs telling the opposite:
                     # https://docs.python.org/2/library/ssl.html#ssl.SSLError
-                    details = 'library=%s reason=%s : %s' % (
-                        getattr(err, 'library', 'missing'),
-                        getattr(err, 'reason', 'missing'),
-                        err)
+                    details = 'idx=%d library=%s reason=%s : %s' \
+                              % (idx, getattr(err, 'library', 'missing'),
+                                 getattr(err, 'reason', 'missing'), err)
                     # output the error in debug mode for now.
-                    logger.error('Error on SSL shutdown : %s', details)
-                    logger.exception('Error on SSL shutdown : %s', err)
+                    logger.debug('Error on SSL shutdown : %s', details)
+                    logger.warning('%s - error on SSL shutdown : %s', self._id, err)
                     # keep retry.
+                except Exception as err:
+                    logger.warning('SSL shutdown failed: %s', str(err))
             sock = self._socket
         else:
             sock = self.socket
+
         try:
             # Also always shutdown the underlying socket:
             # pylint: disable=too-many-function-args
             sock.shutdown(socket.SHUT_RDWR)
         except OSError as err:
             logger.debug('socket.shutdown failed: %s', str(err))
+        except Exception as err:
+            logger.warning('socket.shutdown failed: %s', str(err))
+
         super(NRPEAsyncClient, self).close()
         self.socket = None
+        logger.debug("%s - closed...", self._id)
 
     def set_exit(self, rc, message):
         """
@@ -317,11 +343,14 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
         :param message: message
         :return:
         """
+        logger.debug("%s - socket exit: %s - %s", self._id, rc, message)
+        self.exited = True
         self.close()
         self.rc = rc
         self.message = message
         self.execution_time = time.time() - self.start_time
         self.nrpe.state = 'received'
+        logger.debug("%s - socket exited: %s - %s", self._id, rc, message)
 
     def look_for_timeout(self):
         """
@@ -331,8 +360,17 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
         """
         now = time.time()
         if now - self.start_time > self.timeout:
-            message = ("Error: connection timeout after %d seconds" % self.timeout)
-            self.set_exit(self._rc_on_timeout, message)
+            self.set_exit(self._rc_on_timeout,
+                          "Error: connection timeout after %d seconds" % self.timeout)
+
+    def handle_connect(self):
+        """Handle the socket connection"""
+        logger.debug("%s - socket connected", self._id)
+
+    def handle_close(self):
+        """Handle the socket close"""
+        logger.debug("%s - socket closed", self._id)
+        self.close()
 
     def handle_read(self):
         """
@@ -341,8 +379,12 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
         and wait for handshake finish
         :return:
         """
+        if self.exited:
+            return
+
         if self.is_done():
             return
+
         try:
             self._handle_read()
         except COMMUNICATION_ERRORS as err:
@@ -355,7 +397,7 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
         :return:
         """
         try:
-            buf = self.recv(NRPE_DATA_PACKET_SIZE)
+            buffer = self.recv(NRPE_DATA_PACKET_SIZE)
         except SSLWantReadOrWrite:
             # if we are in ssl, there can be a handshake
             # problem: we can't talk until we finished it.
@@ -367,8 +409,8 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
         else:
             # Maybe we got nothing from the server (it refused our IP,
             # or our arguments...)
-            if buf:
-                rc, message = self.nrpe.read(buf)
+            if buffer:
+                rc, message = self.nrpe.read(buffer)
                 logger.debug("Got, exit code: %s, message: %s", self.rc, self.message)
             else:
                 rc = 2
@@ -381,7 +423,7 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
         Did we finished our job?
         :return:
         """
-        return not self.is_done() and self.nrpe.query
+        return not self.exited and not self.is_done() and self.nrpe.query
 
     def handle_write(self):
         """
@@ -389,6 +431,9 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
         and return. If we finished, we can write our query
         :return:
         """
+        if self.exited:
+            return
+
         try:
             self._handle_write()
         except COMMUNICATION_ERRORS as err:
@@ -426,7 +471,8 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
         :return:
         """
         _, err, _ = sys.exc_info()
-        self.set_exit(2, "Error: %s" % str(err))
+        logger.debug("%s - socket error: %s", self._id, err)
+        self.set_exit(2, "Error: %s" % err)
 
 
 def parse_args(cmd_args):
@@ -484,7 +530,8 @@ def parse_args(cmd_args):
         opts, args = getopt.getopt(cmd_args, "H::p::nut::c::a::", [])
     except getopt.GetoptError as err:
         # If we got problem, bail out - say host is None
-        logger.info("Could not parse a command: %s", err)
+        logger.warning("Could not parse command parameters: %s", cmd_args)
+        logger.warning("Error is: %s", str(err))
         return None, port, unknown_on_timeout, command, timeout, use_ssl, add_args
 
     logger.debug("Parsing arguments: opts = %s, args = %s", opts, args)
@@ -519,6 +566,9 @@ class NrpePoller(BaseModule):
     """
     NRPE Poller module main class
     """
+    # Auto generated identifiers
+    _worker_ids = {}
+
     def __init__(self, mod_conf):
         """
         Module initialization
@@ -531,26 +581,58 @@ class NrpePoller(BaseModule):
         """
         BaseModule.__init__(self, mod_conf)
 
+        # Set our own identifier
+        cls = self.__class__
+        self.module_name = 'nrpe-booster'
+        if self.module_name not in cls._worker_ids:
+            cls._worker_ids[self.module_name] = 1
+        self._id = '%s_%d' % (self.module_name, cls._worker_ids[self.module_name])
+        cls._worker_ids[self.module_name] += 1
+
         # pylint: disable=global-statement
         global logger
         logger = logging.getLogger('alignak.module.%s' % self.alias)
+        if getattr(mod_conf, 'log_level', logging.INFO) in ['DEBUG', 'INFO', 'WARNING', 'ERROR']:
+            logger.setLevel(getattr(mod_conf, 'log_level'))
 
         logger.debug("inner properties: %s", self.__dict__)
         logger.debug("received configuration: %s", mod_conf.__dict__)
-        logger.debug("loaded into: %s", self.loaded_into)
 
         try:
-            self.max_plugins_output_length = int(
-                getattr(mod_conf, 'max_plugins_output_length', '8192'))
+            self.period_stats = int(getattr(mod_conf, 'period_stats', '10'))
+        except ValueError:
+            self.period_stats = 10
+        logger.info("configuration, loop count period for statistics: %d", self.period_stats)
+
+        try:
+            self.max_plugins_output_length = int(getattr(
+                mod_conf, 'max_plugins_output_length', '8192'))
         except ValueError:
             self.max_plugins_output_length = 8192
         logger.info("configuration, maximum output length: %d", self.max_plugins_output_length)
 
+        # SSL configuration
+        self.ssl_method = getattr(mod_conf, 'ssl_ciphers_list', 'SSLv23')
+        if self.ssl_method not in ['SSLv2', 'SSLv3', 'SSLv23', 'TLSv1']:
+            logger.error("SSL configured method is unknown: %s. SSL will not be enabled...",
+                         self.ssl_method)
+        self.ssl_ciphers_list = getattr(mod_conf, 'ssl_ciphers_list',
+                                        'ALL:!MD5:@STRENGTH:@SECLEVEL=0')
+
         self.checks = []
 
         self.returns_queue = None
-        self.s = None
+        self.actions_queue = None
         self.t_each_loop = None
+
+        self._idletime = 0
+        self.actions_got = 0
+        self.actions_launched = 0
+        self.actions_retried = 0
+        self.actions_failed = 0
+        self.actions_finished = 0
+
+        self.interrupted = False
 
         self.i_am_dying = False
 
@@ -559,7 +641,7 @@ class NrpePoller(BaseModule):
         Called by the poller to initialize the module
         :return: True to inform ModuleManager of a correct initialization
         """
-        logger.info("Initialization of the NRPE poller module")
+        logger.info("NRPE poller module %s initialized for %s", self._id, self.loaded_into)
         self.i_am_dying = False
 
         return True
@@ -569,12 +651,12 @@ class NrpePoller(BaseModule):
         Called by the poller to exit the module
         :return: None
         """
-        logger.info("Ending the NRPE poller module")
+        logger.info("NRPE poller module %s exited", self._id)
 
     def do_loop_turn(self):
         pass
 
-    def add_new_check(self, check):
+    def got_new_check(self, check):
         """
         Add a new check to execute
         :param check: alignak.Check
@@ -583,6 +665,7 @@ class NrpePoller(BaseModule):
         check.retried = 0
         logger.debug("Got a new check: %s", check.__dict__)
         self.checks.append(check)
+        self.actions_got += 1
 
     def get_new_checks(self):
         """
@@ -591,22 +674,41 @@ class NrpePoller(BaseModule):
         """
         while True:
             try:
-                msg = self.s.get(block=False)
-            except queue.Empty:
+                msg = self.actions_queue.get_nowait()
+            except queue.Full:
+                logger.warning("Worker actions queue is full!")
                 return
-            if msg is not None:
-                check = msg.get_data()
-                self.add_new_check(check)
+            except queue.Empty:
+                self._idletime += 1
+                return
+            else:
+                if msg:
+                    self.got_new_check(msg.get_data())
 
     def launch_new_checks(self):
         # pylint: disable=too-many-locals
         """
         Launch the new received checks
+
+        A check is a dictionary:
+        {'log_actions': False, 'exit_status': 3, 'passive_check': False,
+        'creation_time': 1546333142.255722, 'reactionner_tag': u'None', 's_time': 0.0,
+        'my_scheduler': '7edeba2b-4874-4680-967a-7ab0c94a702d',
+        'uuid': u'a657edb3-b077-482b-894a-879251efa40e', 'check_time': 0,
+        'long_output': u'', 'wait_time': 0.001, 'state': 0, 'internal': False, 'u_time': 0.0,
+        'env': {}, 'freshness_expiry_check': False, 'depend_on_me': [], 'type': u'',
+        'status': u'queued', 'retried': 0, 'execution_time': 0.0, 't_to_go': 1546333437,
+        'module_type': u'nrpe-booster', 'last_poll': 0, '_in_timeout': False,
+        'ref_type': u'service', 'dependency_check': False, 'my_worker': u'nrpe-booster_1',
+        'ref': u'344df95f-985e-43cd-adfa-deffec53bcbc', 'depend_on': [], 'is_a': u'check',
+        'poller_tag': u'nrpe', 'command': u'/usr/lib/nagios/plugins/check_nrpe -H 10.0.2.22
+        -t 10 -u -n -c check_users', 'timeout': 60, 'output': u'', 'perf_data': u''}
         :return:
         """
         for check in self.checks:
             now = time.time()
-            if check.status not in ['queue']:
+            # Both status may have been used... ascending compatibility!
+            if check.status not in ['queue', 'queued']:
                 continue
 
             check.con = None
@@ -616,11 +718,15 @@ class NrpePoller(BaseModule):
             check.check_time = now
 
             # We want the args of the commands so we parse it like a shell
-            # shlex want str only
+            # shlex wants str only
             try:
                 clean_command = shlex.split(check.command.encode('utf8', 'ignore'))
             except AttributeError:
                 clean_command = shlex.split(check.command)
+
+            # Set an error so we will quit this check
+            host = None
+            command = None
 
             # If the command seems good
             if len(clean_command) > 1:
@@ -628,11 +734,7 @@ class NrpePoller(BaseModule):
                 args = parse_args(clean_command[1:])
                 (host, port, unknown_on_timeout, command, timeout, use_ssl, add_args) = args
                 logger.debug("Parsed arguments: %s / %s / %s / %s / %s / %s / %s",
-                             host, port, unknown_on_timeout, command, timeout, use_ssl,
-                             add_args)
-            else:
-                # Set an error so we will quit this check
-                command = None
+                             host, port, unknown_on_timeout, command, timeout, use_ssl, add_args)
 
             # If we do not have the good args, we bail out for this check
             if host is None:
@@ -644,7 +746,7 @@ class NrpePoller(BaseModule):
                 continue
 
             # if no command is specified, check_nrpe
-            # sends _NRPE_CHECK as default command.
+            # sends _NRPE_CHECK as the default command.
             if command is None:
                 command = '_NRPE_CHECK'
 
@@ -652,47 +754,72 @@ class NrpePoller(BaseModule):
             total_args = [command]
             total_args.extend(add_args)
             cmd = r'!'.join(total_args)
+
             log_function = logger.debug
             if 'ALIGNAK_LOG_ACTIONS' in os.environ:
-                log_function = logger.info
+                if os.environ['ALIGNAK_LOG_ACTIONS'] == 'WARNING':
+                    log_function = logger.warning
+                else:
+                    log_function = logger.info
             log_function("Launch NRPE check: %s", cmd)
-            check.con = NRPEAsyncClient(host, port, use_ssl, timeout, unknown_on_timeout, cmd)
+
+            check.con = NRPEAsyncClient(host, port, use_ssl, timeout, unknown_on_timeout,
+                                        cmd, self.ssl_method, self.ssl_ciphers_list)
+
+            self._idletime = 0
+            self.actions_launched += 1
 
     def manage_finished_checks(self):
         """
         Check the status of the checks
         :return:
         """
+        # First look if launched checks are in timeout
         to_del = []
-
-        # First look for checks in timeout
         for check in self.checks:
-            if check.status == 'launched':
+            if check.status not in ['launched']:
+                continue
+
+            try:
                 check.con.look_for_timeout()
+            except Exception as err:
+                logger.info("manage_finished_checks - error: %s, connection: %s, check: %s",
+                            err, check.con._id, check)
+                self.actions_failed += 1
 
         # Now we look for finished checks
+        to_del = []
+        logger.debug("--- %d checks", len(self.checks))
         for check in self.checks:
             # First manage check in error, bad formed
             if check.status == 'done':
+                self.actions_finished += 1
                 to_del.append(check)
-                self.returns_queue.put(check)
 
-            # Then we check for good checks
+                try:
+                    msg = Message(_type='Done', data=check, source=self._id)
+                    logger.debug("Queuing message: %s", msg)
+                    self.returns_queue.put_nowait(msg)
+                except Exception as exp:  # pylint: disable=broad-except
+                    logger.error("Failed putting messages in returns queue: %s", str(exp))
+
+            # Then we check for finished or timed out checks
             elif check.status == 'launched' and check.con.is_done():
-                con = check.con
                 # unlink our object from the original check,
                 # this might be necessary to allow the check to be again
                 # serializable..
+                con = check.con
                 del check.con
+
                 if con.readwrite_error and check.retried < 2:
-                    logger.warning('%s: Got an IO error (%s), retrying 1 more time.. (cur=%s)',
-                                   check.command, con.message, check.retried)
+                    logger.warning("%s: Got an I/O error (%s), retrying 1 more time... "
+                                   "Current try is %d", check.command, con.message, check.retried)
                     check.retried += 1
-                    check.status = 'queue'
+                    check.status = 'queued'
                     continue
 
                 if check.retried:
-                    logger.info('%s: Successfully retried check :)', check.command)
+                    logger.info('%s: retried check :)', check.command)
 
                 check.status = 'done'
                 check.exit_status = con.rc
@@ -704,29 +831,37 @@ class NrpePoller(BaseModule):
                 check.get_outputs(con.message, self.max_plugins_output_length)
                 check.execution_time = con.execution_time
 
-                # and set this check for deleting
-                # and try to send it
+                self.actions_finished += 1
                 to_del.append(check)
-                self.returns_queue.put(check)
+
+                try:
+                    msg = Message(_type='Done', data=check, source=self._id)
+                    logger.debug("Queuing message: %s", msg)
+                    self.returns_queue.put_nowait(msg)
+                except Exception as exp:  # pylint: disable=broad-except
+                    logger.error("Failed putting messages in returns queue: %s", str(exp))
 
         # And delete finished checks
-        for chk in to_del:
-            self.checks.remove(chk)
+        for check in to_del:
+            self.checks.remove(check)
+        if self.checks:
+            logger.debug("--- %d still launched checks", len(self.checks))
 
-    # Wrapper function for do_work in order to catch potential exceptions
-    def work(self, s, returns_queue, c):
+    def work(self, actions_queue, returns_queue, control_queue):
         """
         Wrapper function for work in order to catch the exception
         to see the real work, look at do_work
         """
         try:
-            self.do_work(s, returns_queue, c)
-        except Exception as err:
-            logger.exception("Got an unhandled exception: %s", err)
-            # Ok I die now
-            raise
+            logger.info("[%s] (pid=%d) starting my job...", self._id, os.getpid())
+            self.do_work(actions_queue, returns_queue, control_queue)
+            logger.info("[%s] (pid=%d) stopped", self._id, os.getpid())
+        # Catch any exception, log the exception and exit anyway
+        except Exception as exp:  # pragma: no cover, this should never happen indeed ;)
+            logger.error("[%s] exited with an unmanaged exception : %s", self._id, str(exp))
+            logger.exception(exp)
 
-    def do_work(self, s, returns_queue, c):
+    def do_work(self, actions_queue, returns_queue, control_queue):
         """
 
         :param s: global queue
@@ -734,20 +869,35 @@ class NrpePoller(BaseModule):
         :param c: control queue for the worker
         :return:
         """
-        logger.debug("Module worker started!")
         # restore default signal handler for the workers:
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
+        setproctitle("alignak-%s worker %s" % (self.loaded_into, self._id))
+
         self.returns_queue = returns_queue
-        self.s = s
+        self.actions_queue = actions_queue
         self.t_each_loop = time.time()
 
-        while True:
+        timeout = 1.0
+        counter = 1
 
-            # We check if all new things in connections
-            # NB : using poll2 instead of poll (poll1 is with select
-            # call that is limited to 1024 connexions, poll2 is ... poll).
-            asyncore.poll2(1)
+        while True:
+            begin = time.time()
+            logger.debug("[%s] loop begin: %s", self._id, begin)
+
+            try:
+                # We check if all new things in connections
+                # NB : using poll2 instead of poll (poll1 is with select
+                # call that is limited to 1024 connexions, poll2 is ... poll).
+                # asyncore.poll2(1)
+                # asyncore.loop(1.0, use_poll=True)
+                # asyncore.loop(timeout)
+                asyncore.loop(timeout, use_poll=True)
+            except socket.error as err:
+                logger.debug('Socket polling error: %s / %s', sys.exc_info(), err)
+            except Exception as err:
+                self.actions_failed += 1
+                logger.info('Socket polling error: %s / %s', sys.exc_info(), err)
 
             # If we are dying (big problem!) we do not
             # take new jobs, we just finished the current one
@@ -760,13 +910,53 @@ class NrpePoller(BaseModule):
             # REF: doc/shinken-action-queues.png (5)
             self.manage_finished_checks()
 
-            # Now get order from master, if any..
-            try:
-                msg = c.get(block=False)
-            except queue.Empty:
-                pass
-            else:
-                logger.debug("Got message: %s", msg.__dict__)
-                if msg.get_type() == 'Die':
-                    logger.info("[NRPEPoller] Dad says we should die...")
-                    break
+            # Maybe someone asked us to die, if so, do it :)
+            if self.interrupted:
+                logger.info("I die because someone asked ;)")
+                break
+
+            # Now get order from master, if any...
+            if control_queue:
+                try:
+                    control_message = control_queue.get_nowait()
+                    logger.info("[%s] Got a message: %s", self._id, control_message)
+                    if control_message.get_type() == 'Die':
+                        logger.info("[%s] The master said we must die... :(", self._id)
+                        break
+                except queue.Full:
+                    logger.warning("Worker control queue is full")
+                except queue.Empty:
+                    pass
+                except Exception as exp:  # pylint: disable=broad-except
+                    logger.error("Exception when getting master orders: %s. ", str(exp))
+
+            timeout -= time.time() - begin
+            if timeout < 0:
+                timeout = 1.0
+            # time.sleep(0.5)
+
+            counter += 1
+            log_function = logger.debug
+            if counter > self.period_stats:
+                # Periodically, sends our statistics and raise a log
+                if 'ALIGNAK_LOG_ACTIONS' in os.environ:
+                    if os.environ['ALIGNAK_LOG_ACTIONS'] == 'WARNING':
+                        log_function = logger.warning
+                    else:
+                        log_function = logger.info
+                data = {
+                    'idle': self._idletime,
+                    'got': self.actions_got,
+                    'launched': self.actions_launched,
+                    'failed': self.actions_failed,
+                    'finished': self.actions_finished
+                }
+                msg = Message(_type='Stats', data=data, source=self._id)
+                self.returns_queue.put_nowait(msg)
+                counter = 1
+
+            log_function("+++ loop end: timeout = %s, idle: %s, checks: %d, "
+                         "actions (got: %d, launched: %d, finished: %d, failed: %d)",
+                         timeout, self._idletime, len(self.checks),
+                         self.actions_got, self.actions_launched,
+                         self.actions_finished, self.actions_failed)
