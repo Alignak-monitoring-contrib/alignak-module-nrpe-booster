@@ -65,9 +65,9 @@ from alignak.basemodule import BaseModule
 from alignak.misc.common import setproctitle, SIGNALS_TO_NAMES_DICT
 from alignak.message import Message
 
+# pylint: disable=wrong-import-position,invalid-name,protected-access
 COMMUNICATION_ERRORS = (OSError)
 
-# pylint: disable=wrong-import-position,invalid-name
 try:
     import OpenSSL
 except ImportError as openssl_import_error:
