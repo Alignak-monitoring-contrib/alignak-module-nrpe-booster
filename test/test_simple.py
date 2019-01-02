@@ -20,6 +20,7 @@
 #
 
 import os
+import re
 import time
 import logging
 
@@ -47,12 +48,15 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-
 class NrpePollerTestMixin(object):
 
     def setUp(self):
         super(NrpePollerTestMixin, self).setUp()
         logger.setLevel(logging.DEBUG)
+
+        # Do not activate more logs
+        if 'ALIGNAK_LOG_ACTIONS' in os.environ:
+            del os.environ['ALIGNAK_LOG_ACTIONS']
 
     def _setup_nrpe(self):
         # Create an Alignak module
@@ -96,7 +100,7 @@ class TestNrpePoller(NrpePollerTestMixin, AlignakTest):
         # We prepare a check in the to_queue
         data = {
             'is_a': 'check',
-            'status': 'queue',
+            'status': 'queued',
             'command': "$USER1$/check_nrpe -H localhost33  -n -u -t 5 -c check_load3 -a 20",
             'timeout': 10,
             'poller_tag': None,
@@ -105,22 +109,48 @@ class TestNrpePoller(NrpePollerTestMixin, AlignakTest):
         }
         c = Check(data)
 
+        Message._id = 0
         msg = Message(_type='Do', data=c)
         print(msg)
         to_queue.put(msg)
 
-        # The worker will read a message by loop. We want it to do 2 loops,
+        # The worker will read a message by loop. We want it to do minimum 10 loops,
         # so we fake a message, and the second message is a real exit one
-        msg1 = Message(_type='Continue')
-        msg2 = Message(_type='Die')
-        control_queue.put(msg1)
-        for _ in range(1, 2):
-            control_queue.put(msg1)
-        control_queue.put(msg2)
+        _run = Message('Continue', source="Me")
+        _die = Message('Die', source="Me")
+        for _ in range(1, 12):
+            control_queue.put(_run)
+        control_queue.put(_die)
 
         # Call module working ...
+        self.clear_logs()
         my_module.work(to_queue, from_queue, control_queue)
 
-        chk = from_queue.get()
+        # Got a check restul
+        msg = from_queue.get()
+        self.assertIsInstance(msg, Message)
+        self.assertEqual(msg.get_type(), 'Done')
+        chk = msg.get_data()
         self.assertEqual('done', chk.status)
         self.assertEqual(2, chk.exit_status)
+
+        # Got a statistics report
+        msg = from_queue.get()
+        self.assertIsInstance(msg, Message)
+        self.assertEqual(msg.get_type(), 'Stats')
+        stats = msg.get_data()
+        # {'idle': 9, 'got': 1, 'launched': 1, 'failed': 0, 'finished': 1}
+        print(stats)
+        self.assertEqual(stats['idle'], 9)
+        self.assertEqual(stats['got'], 1)
+        self.assertEqual(stats['launched'], 1)
+        self.assertEqual(stats['failed'], 0)
+        self.assertEqual(stats['finished'], 1)
+
+        self.show_logs()
+        self.assert_log_match("starting my job...", 0)
+        for idx in range(1, 12):
+            self.assert_log_match("Got a message: Me - 1, type: Continue, data: None", idx)
+        self.assert_log_match("Got a message: Me - 2, type: Die, data: None", 12)
+        self.assert_log_match("The master said we must die...", 13)
+        self.assert_log_match("stopped", 14)

@@ -135,14 +135,17 @@ class TestModuleNrpeBooster(AlignakTest):
             "Give an instance of alignak_module_nrpe_booster for alias: nrpe-booster"
         ), 5)
         self.assert_log_match(re.escape(
-            "configuration, maximum output length: 8192"
+            "configuration, loop count period for statistics: 10"
         ), 6)
-
-        # Starting internal module logs
-        self.assert_log_match("Trying to initialize module: nrpe-booster", 7)
-        self.assert_log_match("Initialization of the NRPE poller module", 8)
+        self.assert_log_match(re.escape(
+            "configuration, maximum output length: 8192"
+        ), 7)
 
         my_module = self.modulemanager.instances[0]
+
+        # Starting internal module logs
+        self.assert_log_match("Trying to initialize module: nrpe-booster", 8)
+        self.assert_log_match("NRPE poller module %s initialized for poller-master" % my_module._id, 9)
 
         # Get list of not external modules
         self.assertListEqual([my_module], self.modulemanager.get_internal_instances())
@@ -167,7 +170,7 @@ class TestModuleNrpeBooster(AlignakTest):
         # Stopping module logs
 
         self.assert_log_match("Shutting down modules...", 0)
-        self.assert_log_match("Ending the NRPE poller module", 1)
+        self.assert_log_match("NRPE poller module %s exited" % my_module._id, 1)
 
     def test_module_start_default(self):
         """
