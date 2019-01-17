@@ -879,7 +879,7 @@ class NrpePoller(BaseModule):
         self.t_each_loop = time.time()
 
         timeout = 1.0
-        counter = 1
+        counter = int(time.time())
 
         while True:
             begin = time.time()
@@ -935,9 +935,8 @@ class NrpePoller(BaseModule):
                 timeout = 1.0
             # time.sleep(0.5)
 
-            counter += 1
             log_function = logger.debug
-            if counter > self.period_stats:
+            if begin > counter + self.period_stats:
                 # Periodically, sends our statistics and raise a log
                 if 'ALIGNAK_LOG_ACTIONS' in os.environ:
                     if os.environ['ALIGNAK_LOG_ACTIONS'] == 'WARNING':
@@ -954,7 +953,7 @@ class NrpePoller(BaseModule):
                 msg = Message(_type='Stats', data=data, source=self._id)
                 self.returns_queue.put_nowait(msg)
                 log_function("Stats: %s", data)
-                counter = 1
+                counter = begin
 
             logger.debug("+++ loop end: timeout = %s, idle: %s, checks: %d, "
                          "actions (got: %d, launched: %d, finished: %d, failed: %d)",
