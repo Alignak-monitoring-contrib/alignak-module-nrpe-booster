@@ -66,7 +66,7 @@ from alignak.misc.common import setproctitle, SIGNALS_TO_NAMES_DICT
 from alignak.message import Message
 
 # pylint: disable=wrong-import-position,invalid-name,protected-access
-COMMUNICATION_ERRORS = (OSError)
+COMMUNICATION_ERRORS = (OSError, socket.error)
 
 try:
     import OpenSSL
@@ -79,7 +79,7 @@ else:
     SSLWantReadOrWrite = (OpenSSL.SSL.WantReadError, OpenSSL.SSL.WantWriteError)
 
     # consider SSLError's to also be a kind of communication error.
-    COMMUNICATION_ERRORS = (OSError, SSLError)
+    COMMUNICATION_ERRORS = (OSError, socket.error, SSLError)
     # effectively, under SSL mode, any TCP reset or such failure
     # will be raised as such an instance of SSLError, which isn't
     # a subclass of IOError nor OSError but we want to catch
@@ -327,10 +327,10 @@ class NRPEAsyncClient(asyncore.dispatcher, object):
             # Also always shutdown the underlying socket:
             # pylint: disable=too-many-function-args
             sock.shutdown(socket.SHUT_RDWR)
-        except OSError as err:
+        except COMMUNICATION_ERRORS as err:
             logger.debug('socket.shutdown failed: %s', str(err))
         except Exception as err:
-            logger.warning('socket.shutdown failed: %s', str(err))
+            logger.warning('socket.shutdown failed: %s / %s', str(err), type(err))
 
         super(NRPEAsyncClient, self).close()
         self.socket = None
@@ -953,9 +953,10 @@ class NrpePoller(BaseModule):
                 }
                 msg = Message(_type='Stats', data=data, source=self._id)
                 self.returns_queue.put_nowait(msg)
+                log_function("Stats: %s", data)
                 counter = 1
 
-            log_function("+++ loop end: timeout = %s, idle: %s, checks: %d, "
+            logger.debug("+++ loop end: timeout = %s, idle: %s, checks: %d, "
                          "actions (got: %d, launched: %d, finished: %d, failed: %d)",
                          timeout, self._idletime, len(self.checks),
                          self.actions_got, self.actions_launched,
