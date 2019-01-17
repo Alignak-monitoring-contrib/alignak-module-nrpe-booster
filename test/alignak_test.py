@@ -784,7 +784,7 @@ define host {
             self._arbiter.setup_alignak_logger()
 
             # Setup our modules manager
-            self._arbiter.load_modules_manager()
+            # self._arbiter.load_modules_manager()
 
             # Load and initialize the arbiter configuration
             self._arbiter.load_monitoring_config_file()
@@ -870,7 +870,7 @@ define host {
                     'env_file': self.env_filename, 'daemon_name': scheduler.name,
                 }
                 self._scheduler_daemon = Alignak(**args)
-                self._scheduler_daemon.load_modules_manager()
+                # self._scheduler_daemon.load_modules_manager()
 
                 # Simulate the scheduler daemon receiving the configuration from its arbiter
                 pushed_configuration = scheduler.unit_test_pushed_configuration
@@ -893,7 +893,7 @@ define host {
                     'env_file': self.env_filename, 'daemon_name': broker.name,
                 }
                 self._broker_daemon = Broker(**args)
-                self._broker_daemon.load_modules_manager()
+                # self._broker_daemon.load_modules_manager()
 
                 # Simulate the scheduler daemon receiving the configuration from its arbiter
                 pushed_configuration = broker.unit_test_pushed_configuration
@@ -917,7 +917,7 @@ define host {
                     'env_file': self.env_filename, 'daemon_name': receiver.name,
                 }
                 self._receiver_daemon = Receiver(**args)
-                self._receiver_daemon.load_modules_manager()
+                # self._receiver_daemon.load_modules_manager()
 
                 # Simulate the scheduler daemon receiving the configuration from its arbiter
                 pushed_configuration = receiver.unit_test_pushed_configuration
