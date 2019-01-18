@@ -864,9 +864,9 @@ class NrpePoller(BaseModule):
     def do_work(self, actions_queue, returns_queue, control_queue):
         """
 
-        :param s: global queue
+        :param actions_queue: global queue
         :param returns_queue: queue of our manager
-        :param c: control queue for the worker
+        :param control_queue: control queue for the worker
         :return:
         """
         # restore default signal handler for the workers:
